@@ -1,0 +1,48 @@
+output_dir_name:  SingleExp
+seed: 42
+n_training_samples_upper_limit: 800000
+n_random_training_samples_percent: 0
+n_training_steps: 10000
+checkpoints: every_1000
+n_print_loss_interval: 100
+n_inference_batch_size: 100000
+pretrained_network_path: ~
+batch_size: 500000
+data:
+  # python sci_ours.py -c config/SingleExp/zjc.yaml  # ImplicitNeuralCompression
+  # /data/HiPCT/kidney/50.16um_LADAF_2020-27_kidney-left_jp2_.tif
+  # /data/HiPCT/spleen/50.16um_LADAF_2020-27_spleen_pag_jp2_.tif
+  # /data/HiPCT/lung/Substack_lung (1024-2048).tif
+  # /data/HiPCT/brain/12.1um_LADAF-2020-31_brain_cerebellum-occipital_pag-0.01_0.02_jp2_.tif
+  # /data/sci/dataset/brain/64x64x64/brain-64_128-64_128-192_256.tif
+  # /data/sci/dataset/brain/256x256x256/brain-0_256-0_256-0_256.tif
+  path: /data/sci/dataset/brain/64x64x64/brain-64_128-64_128-192_256.tif
+  type: HiPCT-brain
+  denoise_level: 0
+  denoise_close: [2,2,2]
+  normalized_min: 0
+  normalized_max: 100
+  weight_map_rules: ~
+compression_ratio: 256
+network_structure:
+  coords_channel: 3
+  data_channel: 1
+  w0: 20
+  experts_num: 6
+  topk: 1
+  gating_layers: 4
+  expert_layers: 10
+  output_act: False
+  gating_feature: 3
+coord_normalized_min: -1
+coord_normalized_max: 1
+optimizer:
+  name: Adamax
+  lr: 0.01
+  betas: [0.9, 0.999]
+  eps: 1e-8
+  weight_decay: 0.003
+lr_scheduler:
+  name: MultiStepLR
+  milestones: [50000,60000,70000]
+  gamma: 0.2

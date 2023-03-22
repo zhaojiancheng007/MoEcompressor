@@ -1,0 +1,42 @@
+_is_zerotensor:
+<built-in method _is_zerotensor of Tensor object at 0x7ff241bc8e00>
+_make_subclass:
+<built-in method _make_subclass of torch._C._TensorMeta object at 0x7ff33f5b3680>
+_make_wrapper_subclass:
+<built-in method _make_wrapper_subclass of torch._C._TensorMeta object at 0x7ff33f5b3680>
+_neg_view:
+<built-in method _neg_view of Tensor object at 0x7ff241bc8e00>
+_nested_tensor_layer_norm:
+<built-in method _nested_tensor_layer_norm of Tensor object at 0x7ff241bc8e00>
+_nested_tensor_size:
+<built-in method _nested_tensor_size of Tensor object at 0x7ff241bc8e00>
+_nnz:
+<built-in method _nnz of Tensor object at 0x7ff241bc8e00>
+_python_dispatch:
+False
+_reduce_ex_internal:
+<bound method Tensor._reduce_ex_internal of tensor([[0.1817, 0.3158, 0.2661, 0.2364],
+        [0.1819, 0.3188, 0.2646, 0.2347],
+        [0.1821, 0.3219, 0.2631, 0.2329],
+        ...,
+        [0.1928, 0.4597, 0.2033, 0.1442],
+        [0.1927, 0.4601, 0.2038, 0.1435],
+        [0.1925, 0.4604, 0.2043, 0.1428]], device='cuda:0',
+       grad_fn=<SoftmaxBackward0>)>
+_storage:
+<built-in method _storage of Tensor object at 0x7ff241bc8e00>
+_to_dense:
+<built-in method _to_dense of Tensor object at 0x7ff241bc8e00>
+_update_names:
+<bound method Tensor._update_names of tensor([[0.1817, 0.3158, 0.2661, 0.2364],
+        [0.1819, 0.3188, 0.2646, 0.2347],
+        [0.1821, 0.3219, 0.2631, 0.2329],
+        ...,
+        [0.1928, 0.4597, 0.2033, 0.1442],
+        [0.1927, 0.4601, 0.2038, 0.1435],
+        [0.1925, 0.4604, 0.2043, 0.1428]], device='cuda:0',
+       grad_fn=<SoftmaxBackward0>)>
+_values:
+<built-in method _values of Tensor object at 0x7ff241bc8e00>
+_version:
+0
