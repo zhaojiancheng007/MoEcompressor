@@ -8,7 +8,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 from omegaconf import OmegaConf
-import os
+
 
 config_path = os.path.join(os.path.dirname(__file__), '..', "config", "SingleExp", "zjc.yaml")
 config = OmegaConf.load(config_path)
@@ -24,9 +24,19 @@ def sine_init(m):
     with torch.no_grad():
         if hasattr(m, "weight"):
             num_input = m.weight.size(-1)
-            # See supplement Sec. 1.5 for discussion of factor 30
             m.weight.uniform_(-np.sqrt(6 / num_input) / 30, np.sqrt(6 / num_input) / 30)
-
+        if hasattr(m, "input_w"):
+            num_input = m.input_w.size(-1)
+            # See supplement Sec. 1.5 for discussion of factor 30
+            m.input_w.uniform_(-np.sqrt(6 / num_input) / 30, np.sqrt(6 / num_input) / 30)
+        if hasattr(m, "sensory_w"):
+            num_input = m.sensory_w.size(-1)
+            # See supplement Sec. 1.5 for discussion of factor 30
+            m.sensory_w.uniform_(-np.sqrt(6 / num_input) / 30, np.sqrt(6 / num_input) / 30)
+        if hasattr(m, "w"):
+            num_input = m.w.size(-1)
+            # See supplement Sec. 1.5 for discussion of factor 30
+            m.w.uniform_(-np.sqrt(6 / num_input) / 30, np.sqrt(6 / num_input) / 30)
 
 def first_layer_sine_init(m):
     with torch.no_grad():
@@ -54,7 +64,6 @@ class Sine(nn.Module):
     def forward(self, input):
         # See paper sec. 3.2, final paragraph, and supplement Sec. 1.5 for discussion of factor 30
         return torch.sin(self.w0 * input)
-
 
 class SIREN(nn.Module):
     """
@@ -87,7 +96,10 @@ class SIREN(nn.Module):
             self.net.append(nn.Sequential(nn.Linear(features, data_channel), Sine()))
         else:
             self.net.append(nn.Sequential(nn.Linear(features, data_channel)))
+            
         self.net = nn.Sequential(*self.net)
+        print('features:', features)
+        print('layers:', layers)
         
         self.net.apply(sine_init)
         self.net[0].apply(first_layer_sine_init)
@@ -107,8 +119,6 @@ class SIREN(nn.Module):
             + data_channel
         )
         return int(param_count)
-    
-    
 
     @staticmethod
     def calc_features(param_count, coords_channel, data_channel, layers, **kwargs):
@@ -129,39 +139,43 @@ class SIREN_zcq(nn.Module):
         data_channel=1,
         features = None,
         expert_layers=config.network_structure.expert_layers,
-        w0=30,
+        w0=20,
         output_act=False,
+        frequencies=5,
         **kwargs,
     ):
         super().__init__()
         self.net = []
         self.net.append(nn.Sequential(nn.Linear(coords_channel, features), Sine(w0)))
         for i in range(expert_layers - 2):
-            self.net.append(nn.Sequential(nn.Linear(features, features), Sine()))
+            self.net.append(nn.Sequential(nn.Linear(features, features), Sine(w0)))
         if output_act:
-            self.net.append(nn.Sequential(nn.Linear(features, data_channel), Sine()))
+            self.net.append(nn.Sequential(nn.Linear(features, data_channel), Sine(w0)))
         else:
             self.net.append(nn.Sequential(nn.Linear(features, data_channel)))
         self.net = nn.Sequential(*self.net)
+        print('features:', features)
+        print('layers:', expert_layers)
         self.net.apply(sine_init)
         self.net[0].apply(first_layer_sine_init)
 
     def forward(self, coords):
         output = self.net(coords)
         return output
-    
+
 #ourmodel          
 class MoE(nn.Module):
     def __init__(
         self,
         n_network_features,
         coords_channel,
-        bandwidth=45,
-        experts_num=None, 
-        gating_feature=None,
+        bandwidth=50,
+        experts_num=5, 
+        gating_feature=16,
         topk=None,
-        gating_layers = 2,
+        gating_layers = 4,
         expert_layers=None,
+        frequencies = 5,
         **kwargs,
     ):
         super().__init__()
@@ -177,13 +191,19 @@ class MoE(nn.Module):
         #     param_count=ideal_network_parameters_count, **config.network_structure,
         # )
         
+        ### Positional Encoding ###
+        # self.positional_encoding = PosEncodingSIREN(
+        #     in_channel=coords_channel, frequencies=frequencies
+        # )
+        # in_channel = self.positional_encoding.out_channel
         ### First Linear ###
-        self.first_linear = nn.Sequential(nn.Linear(coords_channel, gating_feature))
+        self.first_linear = nn.Sequential(nn.Linear(coords_channel, gating_feature), Sine())
         ### Gating Network ###
         self.gate = []
         for i in range(gating_layers-2):
-            self.gate.append(nn.Sequential(nn.Linear(gating_feature, gating_feature), nn.ReLU()))
-        self.gate.append(nn.Sequential(nn.Linear(gating_feature, gating_feature), nn.LayerNorm([gating_feature])))
+            # self.gate.append(nn.Sequential(nn.Linear(gating_feature, gating_feature), Sine(bandwidth/2.0 + i*bandwidth)))
+            self.gate.append(nn.Sequential(nn.Linear(gating_feature, gating_feature), Sine()))
+        self.gate.append(nn.Sequential(nn.Linear(gating_feature, gating_feature), Sine()))
         self.gate.append(nn.Sequential(nn.Linear(gating_feature, experts_num)))
         self.gate.append(nn.Sequential(nn.Softmax(dim=1)))
         self.gate = nn.Sequential(*self.gate)
@@ -193,7 +213,7 @@ class MoE(nn.Module):
             freq = bandwidth/2.0 + i*bandwidth #指定每一个SIREN模型里用到的激活函数sine的w0
             self.expert.append(nn.Sequential( \
                 SIREN_zcq(coords_channel = self.gating_feature, layers=self.expert_layers, \
-                features= self.n_network_features, data_channel = 1, w0 = freq, output_act=False)))
+                features= self.n_network_features, data_channel = 1, w0 = freq, frequencies=5, output_act=False)))
         self.expert = nn.ModuleList(self.expert)
         # self.expert.cuda()
         #初始化first_linear和gating
@@ -201,33 +221,54 @@ class MoE(nn.Module):
         self.gate.apply(gate_init)
 
     def forward(self, coords):
+        # coords = self.positional_encoding(coords)
         feature = self.first_linear(coords)
-        index = self.gate(feature)
-        x = None
-        for idx, m in enumerate(self.expert):
-            if x == None:
-                x = m(feature)
-            else:
-                x = torch.cat((x, m(feature)), dim = 1)
+        softmax_out = self.gate(feature)
+        indices_to_remove = ~(softmax_out < torch.topk(softmax_out, self.topk)[0][..., -1, None])
+        index = torch.argmax(softmax_out, dim=-1, keepdim=True)
+        
+        out = torch.zeros(coords.shape[0],1)
+        device = torch.device('cuda:'+ str(torch.cuda.current_device()))
+        out = out.to(device)
+        
+        indices = None
+        features_expert = None
 
-        indices_to_remove = ~(index < torch.topk(index, self.topk)[0][..., -1, None])
-        # index_v = indices_to_remove    
-        output = torch.sum(x * indices_to_remove, dim = 1, keepdim=True)
+        for i in range(self.experts_num):
+            indices = (index == i).nonzero(as_tuple=True)[0]
+            if min(indices.shape) == 0:
+                continue
+            features_expert = feature[indices, :]
+
+            output_expert = self.expert[i](features_expert)
+            out.to(output_expert.device)
+            out.index_copy_(0, indices, output_expert)
+            
+        # x = None
+        # for idx, m in enumerate(self.expert):
+        #     if x == None:
+        #         x = m(feature)
+        #     else:
+        #         x = torch.cat((x, m(feature)), dim = 1)
+
+
+        # # index_v = indices_to_remove    
+        # output = torch.sum(x * indices_to_remove, dim = 1, keepdim=True)
         
         # Auxiliary loss
         c = (indices_to_remove == True).sum(dim = 0) * 1.0
-        m = (indices_to_remove == True).sum(dim = 0) * 1.0
-
-        N = x.shape[0]
+        m = softmax_out.sum(dim = 0) * 1.0
+        # print(softmax_out)
+        N = out.shape[0]
         n = self.expert_num
         aux_loss = n/N/N*(torch.dot(c,m))
         
-        # q = torch.ones_like(m)
-        # q = q*(N/n)
+        q = torch.ones_like(m)
+        q = q*(N/n)
         
-        # kld_loss = torch.sum(m*torch.log(m) - m*torch.log(q)) /N/n
+        kld_loss = torch.sum(m*torch.log(m) - m*torch.log(q)) /N/n
+        return out, aux_loss, kld_loss
         
-        return output, aux_loss
     
     # cal_param_count_ourmodel, 计算有多少个参数
     @staticmethod
@@ -307,7 +348,7 @@ class NeRF(nn.Module):
         self.net = nn.ModuleList(self.net)
 
     def forward(self, coords):
-        codings = self.positional_encoding(coords)
+        # codings = self.positional_encoding(coords)
         output = codings
         for idx, model in enumerate(self.net):
             output = model(output)
@@ -337,79 +378,28 @@ class NeRF(nn.Module):
         c = -param_count + data_channel
         features = round((-b + math.sqrt(b**2 - 4 * a * c)) / (2 * a))
         return features
-
-
-def configure_optimizer(parameters, optimizer_opt) -> torch.optim.Optimizer:
-    optimizer_opt = deepcopy(optimizer_opt)
-    optimizer_name = optimizer_opt.pop("name")
-    if optimizer_name == "Adam":
-        Optimizer = torch.optim.Adam(parameters, **optimizer_opt)
-    elif optimizer_name == "Adamax":
-        Optimizer = torch.optim.Adamax(parameters, **optimizer_opt)
-    elif optimizer_name == "SGD":
-        Optimizer = torch.optim.SGD(parameters, **optimizer_opt)
-    else:
-        raise NotImplementedError
-    return Optimizer
-
-class NeRF_zcq(nn.Module):
-    def __init__(
-        self,
-        coords_channel=3,
-        data_channel=1,
-        # frequencies=10,
-        features=256,
-        layers = 5,
-    ):
-        super().__init__()
-        # self.positional_encoding = PosEncodingNeRF(
-        #     in_channel=coords_channel, frequencies=frequencies
-        # )
-        # in_channel = self.positional_encoding.out_channel
-        self.net = []
-        # self.net.append(
-        #     nn.Sequential(nn.Linear(in_channel, features), nn.ReLU(inplace=True))
-        # )
-        self.net.append(
-            nn.Sequential(nn.Linear(coords_channel, features), nn.ReLU(inplace=True))
-        )
-        for i in range(layers - 2):
-            self.net.append(
-                nn.Sequential(nn.Linear(features, features), nn.ReLU(inplace=True))
-            )
-        self.net.append(nn.Sequential(nn.Linear(features, data_channel)))
-        self.net = nn.ModuleList(self.net)
-
-    def forward(self, feature):
-        # codings = self.positional_encoding(coords)
-        # output = codings
-        for idx, model in enumerate(self.net):
-            feature = model(feature)
-        return feature
-
+    
+     # cal_param_count_ourmodel, 计算有多少个参数
     @staticmethod
-    def calc_param_count(
-        coords_channel, data_channel, features, frequencies, layers, **kwargs
-    ):
-        d = coords_channel + 2 * coords_channel * frequencies
+    def calc_param_count_ourmodel(coords_channel, data_channel, features, expert_layers, experts_num, gating_feature, **kwargs):
         param_count = (
-            d * features
-            + features
-            + (layers - 2) * (features**2 + features)
-            + features * data_channel
-            + data_channel
+            (gating_feature * features + features + (expert_layers-2) * (features**2 + features) + features * data_channel + data_channel) * experts_num
+            + 3 * (gating_feature**2 + gating_feature) + gating_feature * experts_num + experts_num
+            + coords_channel * gating_feature + gating_feature
         )
         return int(param_count)
-
+    
+    # cal_features_ourmodel， 计算需要网络需要的features数（模型宽度）
     @staticmethod
-    def calc_features(
-        param_count, coords_channel, data_channel, frequencies, layers, **kwargs
-    ):
-        d = coords_channel + 2 * coords_channel * frequencies
-        a = layers - 2
-        b = d + 1 + layers - 2 + data_channel
-        c = -param_count + data_channel
-        features = round((-b + math.sqrt(b**2 - 4 * a * c)) / (2 * a))
+    def calc_features_ourmodel(param_count, coords_channel, data_channel, expert_layers, experts_num, gating_feature,**kwargs):
+        a = (expert_layers - 2) * experts_num
+        b = (gating_feature+1+expert_layers-2+data_channel) * experts_num
+        c = (-param_count + data_channel * experts_num + 3 * (gating_feature**2 + gating_feature) + gating_feature * experts_num + experts_num
+            + coords_channel * gating_feature + gating_feature)
+        if a == 0:
+            features = round(-c / b)
+        else:
+            features = round((-b + math.sqrt(b**2 - 4 * a * c)) / (2 * a))
         return features
 
 
@@ -447,15 +437,15 @@ def configure_lr_scheduler(optimizer, lr_scheduler_opt):
     return lr_scheduler
 
 
-def l2_loss(gt, predicted, weight_map) -> torch.Tensor:
+def l2_loss(gt, predicted) -> torch.Tensor:
     loss = F.mse_loss(gt, predicted, reduction="none")
-    loss = loss * weight_map
+    loss = loss
     loss = loss.mean()
     return loss
 
-def l2_loss_2(gt, predicted) -> torch.Tensor:
+def l2_loss_weight(gt, predicted, weight_up_map) -> torch.Tensor:
     loss = F.mse_loss(gt, predicted, reduction="none")
-    loss = loss
+    loss = loss * weight_up_map
     loss = loss.mean()
     return loss
 
@@ -543,3 +533,145 @@ def model_structure(model):
     print('The total number of parameters: ' + str(num_para))
     print('The parameters of Model {}: {:4f}M'.format(model._get_name(), num_para * type_size / 1000 / 1000))
     print('-' * 90)
+    
+    
+    #ourmodel          
+class MoE_cnn(nn.Module):
+    def __init__(
+        self,
+        n_network_features,
+        coords_channel,
+        bandwidth=45,
+        experts_num=None, 
+        gating_feature=32,
+        topk=None,
+        gating_layers = 3,
+        expert_layers=None,
+        frequencies = 5,
+        **kwargs,
+    ):
+        super().__init__()
+        self.coords_channel = coords_channel
+        self.experts_num = experts_num
+        self.gating_feature = gating_feature
+        self.topk = topk
+        self.expert_num = experts_num
+        self.expert_layers = expert_layers
+        self.n_network_features = n_network_features
+        
+        ### First Linear ###
+        self.first_linear = nn.Sequential(nn.Linear(coords_channel, gating_feature))
+        ### Gating Network ###
+        self.gate = []
+        for i in range(gating_layers-2):
+            self.gate.append(nn.Sequential(nn.Linear(gating_feature, gating_feature), nn.ReLU()))
+        self.gate.append(nn.Sequential(nn.Linear(gating_feature, gating_feature), nn.LayerNorm([gating_feature])))
+        self.gate.append(nn.Sequential(nn.Linear(gating_feature, experts_num)))
+        self.gate.append(nn.Sequential(nn.Softmax(dim=1)))
+        self.gate = nn.Sequential(*self.gate)
+        
+        ### Experts Network ###
+        self.expert = []
+        for i in range(experts_num):
+            freq = bandwidth/2.0 + i*bandwidth #指定每一个SIREN模型里用到的激活函数sine的w0
+            self.expert.append(nn.Sequential( \
+                SIREN_zcq(coords_channel = self.gating_feature, layers=self.expert_layers, \
+                features= self.n_network_features, data_channel = 1, w0 = freq, frequencies=5, output_act=False)))
+        self.expert = nn.ModuleList(self.expert)
+
+        #初始化first_linear和gating
+        self.first_linear.apply(first_layer_sine_init)
+        self.gate.apply(gate_init)
+
+    def forward(self, coords):
+        # coords = self.positional_encoding(coords)
+        feature = self.first_linear(coords)
+        softmax_out = self.gate(feature)
+        indices_to_remove = ~(softmax_out < torch.topk(softmax_out, self.topk)[0][..., -1, None])
+        index = torch.argmax(softmax_out, dim=-1, keepdim=True)
+        
+        out = torch.zeros(coords.shape[0],1)
+        device = torch.device('cuda:'+ str(torch.cuda.current_device()))
+        out = out.to(device)
+        
+        indices = None
+        features_expert = None
+
+        for i in range(self.experts_num):
+            indices = (index == i).nonzero(as_tuple=True)[0]
+            if min(indices.shape) == 0:
+                continue
+            features_expert = feature[indices, :]
+
+            output_expert = self.expert[i](features_expert)
+            out.to(output_expert.device)
+            out.index_copy_(0, indices, output_expert)
+            
+        # Auxiliary loss
+        c = (indices_to_remove == True).sum(dim = 0) * 1.0
+        m = softmax_out.sum(dim = 0) * 1.0
+        # print(softmax_out)
+        N = out.shape[0]
+        n = self.expert_num
+        aux_loss = n/N/N*(torch.dot(c,m))
+        
+        q = torch.ones_like(m)
+        q = q*(N/n)
+        
+        kld_loss = torch.sum(m*torch.log(m) - m*torch.log(q)) /N/n
+        return out, aux_loss, kld_loss
+        
+    
+    # cal_param_count_ourmodel, 计算有多少个参数
+    @staticmethod
+    def calc_param_count_ourmodel(coords_channel, data_channel, features, expert_layers, experts_num, gating_feature, **kwargs):
+        param_count = (
+            (gating_feature * features + features + (expert_layers-2) * (features**2 + features) + features * data_channel + data_channel) * experts_num
+            + 3 * (gating_feature**2 + gating_feature) + gating_feature * experts_num + experts_num
+            + coords_channel * gating_feature + gating_feature
+        )
+        return int(param_count)
+    
+    # cal_features_ourmodel， 计算需要网络需要的features数（模型宽度）
+    @staticmethod
+    def calc_features_ourmodel(param_count, coords_channel, data_channel, expert_layers, experts_num, gating_feature,**kwargs):
+        a = (expert_layers - 2) * experts_num
+        b = (gating_feature+1+expert_layers-2+data_channel) * experts_num
+        c = (-param_count + data_channel * experts_num + 3 * (gating_feature**2 + gating_feature) + gating_feature * experts_num + experts_num
+            + coords_channel * gating_feature + gating_feature)
+        if a == 0:
+            features = round(-c / b)
+        else:
+            features = round((-b + math.sqrt(b**2 - 4 * a * c)) / (2 * a))
+        return features
+           
+def model_structure(model):
+    blank = ' '
+    print('-' * 90)
+    print('|' + ' ' * 11 + 'weight name' + ' ' * 10 + '|' \
+          + ' ' * 15 + 'weight shape' + ' ' * 15 + '|' \
+          + ' ' * 3 + 'number' + ' ' * 3 + '|')
+    print('-' * 90)
+    num_para = 0
+    type_size = 1  # 如果是浮点数就是4
+
+    for index, (key, w_variable) in enumerate(model.named_parameters()):
+        if len(key) <= 30:
+            key = key + (30 - len(key)) * blank
+        shape = str(w_variable.shape)
+        if len(shape) <= 40:
+            shape = shape + (40 - len(shape)) * blank
+        each_para = 1
+        for k in w_variable.shape:
+            each_para *= k
+        num_para += each_para
+        str_num = str(each_para)
+        if len(str_num) <= 10:
+            str_num = str_num + (10 - len(str_num)) * blank
+
+        print('| {} | {} | {} |'.format(key, shape, str_num))
+    print('-' * 90)
+    print('The total number of parameters: ' + str(num_para))
+    print('The parameters of Model {}: {:4f}M'.format(model._get_name(), num_para * type_size / 1000 / 1000))
+    print('-' * 90)
+    
